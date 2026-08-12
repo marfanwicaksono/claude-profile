@@ -1,0 +1,12 @@
+# Never commit profile data. It lives in ~/.claude-profiles by design, but guard
+# against a copy or symlink ever landing in the working tree.
+.claude-profiles/
+.credentials.json
+.claude.json
+*.log
+
+# Editor / OS noise
+.DS_Store
+*.swp
+__pycache__/
+*.pyc

@@ -1,0 +1,41 @@
+#!/bin/bash
+# Per-project Claude Code account switching for the VSCode extension.
+#
+# The extension spawns the claude binary directly from its Node host, so the
+# claude() shell function in ~/.bashrc never runs. This script is invoked
+# instead, via the `claudeCode.claudeProcessWrapper` setting.
+#
+# The extension calls it as:   <this script> <real-claude-binary> [args...]
+# so $1 is the real binary and cwd is the workspace folder.
+#
+# Same resolution rule as the shell wrapper: nearest .claude-profile walking up
+# from cwd names a directory under ~/.claude-profiles/.
+
+CLAUDE_PROFILE_ROOT="$HOME/.claude-profiles"
+LOG="$CLAUDE_PROFILE_ROOT/vscode-wrapper.log"
+
+real="$1"
+[ -n "$real" ] && shift
+
+d="$PWD"
+name=""
+while [ -n "$d" ] && [ "$d" != "/" ]; do
+    if [ -r "$d/.claude-profile" ]; then
+        name=$(tr -d '[:space:]' < "$d/.claude-profile")
+        break
+    fi
+    d=${d%/*}
+done
+
+if [ -n "$name" ] && [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
+    export CLAUDE_CONFIG_DIR="$CLAUDE_PROFILE_ROOT/$name"
+    printf '%s cwd=%s profile=%s\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+elif [ -n "$name" ]; then
+    # Named a profile that does not exist. Fall through to the default account
+    # rather than launching an unauthenticated blank config.
+    printf '%s cwd=%s profile=%s MISSING -> default\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+else
+    printf '%s cwd=%s no-profile -> default\n' "$(date -Is)" "$PWD" >> "$LOG" 2>/dev/null
+fi
+
+exec "$real" "$@"

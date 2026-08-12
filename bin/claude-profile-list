@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""List Claude Code profiles and the account each one is logged into.
+
+Reads account identity straight out of each profile's config files rather than
+spawning `claude auth status` per profile, which would cost a full process
+launch each time (~500ms vs ~27ms for all profiles).
+
+  <profile>/.claude.json         -> oauthAccount.emailAddress
+  <profile>/.credentials.json    -> claudeAiOauth.subscriptionType
+
+The default account is the exception: its config lives at ~/.claude.json
+(outside the config dir), with credentials in ~/.claude/.credentials.json.
+
+Usage:
+  claude-profile-list                 table of all profiles
+  claude-profile-list --account NAME  one line: "<email> (<plan>)" for NAME
+
+Environment:
+  CLAUDE_PROFILE_ROOT    where profiles live (default ~/.claude-profiles)
+  CLAUDE_ACTIVE_PROFILE  which row to mark with '*'; the shell function sets
+                         this from the .claude-profile resolved for $PWD
+"""
+
+import json
+import os
+import sys
+
+HOME = os.path.expanduser("~")
+ROOT = os.environ.get("CLAUDE_PROFILE_ROOT", os.path.join(HOME, ".claude-profiles"))
+ACTIVE = os.environ.get("CLAUDE_ACTIVE_PROFILE", "")
+RESERVED = {"bin"}
+
+
+def read_json(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def paths_for(name):
+    """-> (config_json, credentials_json) for a profile name, or the default."""
+    if name == "default":
+        return (
+            os.path.join(HOME, ".claude.json"),
+            os.path.join(HOME, ".claude", ".credentials.json"),
+        )
+    base = os.path.join(ROOT, name)
+    return (
+        os.path.join(base, ".claude.json"),
+        os.path.join(base, ".credentials.json"),
+    )
+
+
+def describe(name):
+    """-> (account, plan) as display strings."""
+    config_json, credentials_json = paths_for(name)
+    account = read_json(config_json).get("oauthAccount", {}).get("emailAddress")
+    creds = read_json(credentials_json).get("claudeAiOauth", {})
+    plan = creds.get("subscriptionType")
+    if account:
+        return account, (plan or "")
+    if creds:
+        return "(logged in, account unknown)", (plan or "")
+    return "(not logged in)", ""
+
+
+def profile_names():
+    names = []
+    if os.path.isdir(ROOT):
+        for name in sorted(os.listdir(ROOT)):
+            if name in RESERVED or not os.path.isdir(os.path.join(ROOT, name)):
+                continue
+            names.append(name)
+    return names
+
+
+def show_account(name):
+    account, plan = describe(name)
+    print(f"{account} ({plan})" if plan else account)
+
+
+def show_table():
+    rows = [(name, *describe(name)) for name in profile_names()]
+    rows.append(("default", *describe("default")))
+
+    w_name = max(len(r[0]) for r in rows)
+    w_acct = max(len(r[1]) for r in rows)
+    for name, acct, plan in rows:
+        # '*' marks the profile active in the current directory, not the
+        # default account — the default is already labelled by name.
+        marker = "*" if name == ACTIVE else " "
+        suffix = "  <- ~/.claude" if name == "default" else ""
+        print(f"  {marker} {name:<{w_name}}  {acct:<{w_acct}}  {plan}{suffix}".rstrip())
+
+    # The whole point of profiles is separate accounts; sharing one is almost
+    # always an unfinished setup, so say so rather than letting it look correct.
+    seen = {}
+    for name, acct, _ in rows:
+        if "@" in acct:
+            seen.setdefault(acct, []).append(name)
+    for acct, names in seen.items():
+        if len(names) > 1:
+            if len(names) == 2:
+                joined = " and ".join(names)
+            else:
+                joined = ", ".join(names[:-1]) + " and " + names[-1]
+            # Conversation history is shared across every profile, so it is not
+            # something duplicates keep separate — settings and MCP servers are.
+            print(f"\n  note: {joined} share the same account ({acct}).")
+            print("        Separate settings and MCP servers, but one usage quota.")
+
+
+def main():
+    args = sys.argv[1:]
+    if args and args[0] == "--account":
+        if len(args) < 2:
+            print("usage: claude-profile-list --account <name>", file=sys.stderr)
+            return 1
+        show_account(args[1])
+        return 0
+    if args:
+        print(f"unknown option: {args[0]}", file=sys.stderr)
+        return 1
+    show_table()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        sys.exit(0)
