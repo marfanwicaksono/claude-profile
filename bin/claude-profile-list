@@ -5,6 +5,8 @@ Reads account identity straight out of each profile's config files rather than
 spawning `claude auth status` per profile, which would cost a full process
 launch each time (~500ms vs ~27ms for all profiles).
 
+  <profile>/.api-key             -> API-key auth; contents never printed
+  <profile>/.api-base-url        -> gateway/proxy host for an API-key profile
   <profile>/.claude.json         -> oauthAccount.emailAddress
   <profile>/.credentials.json    -> claudeAiOauth.subscriptionType
 
@@ -24,11 +26,14 @@ Environment:
 import json
 import os
 import sys
+from urllib.parse import urlparse
 
 HOME = os.path.expanduser("~")
 ROOT = os.environ.get("CLAUDE_PROFILE_ROOT", os.path.join(HOME, ".claude-profiles"))
 ACTIVE = os.environ.get("CLAUDE_ACTIVE_PROFILE", "")
 RESERVED = {"bin"}
+
+ANTHROPIC_HOSTS = {"api.anthropic.com"}
 
 
 def read_json(path):
@@ -39,44 +44,69 @@ def read_json(path):
         return {}
 
 
+def read_line(path):
+    """First non-empty line of a file, stripped. '' if unreadable or empty."""
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    return line
+    except OSError:
+        pass
+    return ""
+
+
 def paths_for(name):
-    """-> (config_json, credentials_json) for a profile name, or the default."""
+    """-> (config_json, credentials_json, api_key, api_base_url) for a profile."""
     if name == "default":
+        base = os.path.join(HOME, ".claude")
         return (
             os.path.join(HOME, ".claude.json"),
-            os.path.join(HOME, ".claude", ".credentials.json"),
+            os.path.join(base, ".credentials.json"),
+            os.path.join(base, ".api-key"),
+            os.path.join(base, ".api-base-url"),
         )
     base = os.path.join(ROOT, name)
     return (
         os.path.join(base, ".claude.json"),
         os.path.join(base, ".credentials.json"),
+        os.path.join(base, ".api-key"),
+        os.path.join(base, ".api-base-url"),
     )
 
 
 def describe(name):
-    """-> (account, plan, auth_method) as display strings."""
-    config_json, credentials_json = paths_for(name)
+    """-> (account, plan, third_party_host) as display strings.
 
-    # Check for API key authentication
-    if name == "default":
-        api_key_file = os.path.join(HOME, ".claude", ".api-key")
-    else:
-        api_key_file = os.path.join(ROOT, name, ".api-key")
+    third_party_host is the endpoint's hostname when it is not Anthropic's own
+    API, else "". Callers decide how to flag it; the table footnotes it.
 
-    if os.path.isfile(api_key_file):
-        config = read_json(config_json)
-        auth_method_marker = config.get("authMethod")
-        return "(API key)", "", "api-key"
+    An API key wins over stored OAuth credentials, because that is the order the
+    launcher applies them: ANTHROPIC_API_KEY set at launch takes precedence over
+    whatever .credentials.json still holds. Showing the stale OAuth email for a
+    profile that actually bills an API key is the one wrong answer here.
+    """
+    config_json, credentials_json, api_key, api_base_url = paths_for(name)
 
-    # OAuth authentication
+    if read_line(api_key):
+        url = read_line(api_base_url)
+        if not url:
+            return "(API key)", "api-key", ""
+        host = urlparse(url).hostname or url
+        if host in ANTHROPIC_HOSTS:
+            return "(API key)", "api-key", ""
+        # The host is the whole point of the row: it is where the prompts go.
+        return f"(API key -> {host})", "api-key", host
+
     account = read_json(config_json).get("oauthAccount", {}).get("emailAddress")
     creds = read_json(credentials_json).get("claudeAiOauth", {})
     plan = creds.get("subscriptionType")
     if account:
-        return account, (plan or ""), "oauth"
+        return account, (plan or ""), ""
     if creds:
-        return "(logged in, account unknown)", (plan or ""), "oauth"
-    return "(not logged in)", "", "none"
+        return "(logged in, account unknown)", (plan or ""), ""
+    return "(not logged in)", "", ""
 
 
 def profile_names():
@@ -90,11 +120,10 @@ def profile_names():
 
 
 def show_account(name):
-    account, plan, auth_method = describe(name)
-    if plan:
-        print(f"{account} ({plan})")
-    else:
-        print(account)
+    account, plan, third_party = describe(name)
+    print(f"{account} ({plan})" if plan else account)
+    if third_party:
+        print(f"         requests go to {third_party}, not Anthropic's API")
 
 
 def show_table():
@@ -103,25 +132,24 @@ def show_table():
 
     w_name = max(len(r[0]) for r in rows)
     w_acct = max(len(r[1]) for r in rows)
-    w_plan = max(len(r[2]) for r in rows) if any(r[2] for r in rows) else 0
-
-    for name, acct, plan, auth_method in rows:
+    w_plan = max(len(r[2]) for r in rows)
+    for name, acct, plan, third_party in rows:
         # '*' marks the profile active in the current directory, not the
         # default account — the default is already labelled by name.
         marker = "*" if name == ACTIVE else " "
+        # A separate dagger, because the two marks answer different questions:
+        # '*' is "does this apply here", the dagger is "where do prompts go".
+        flag = " †" if third_party else ""
         suffix = "  <- ~/.claude" if name == "default" else ""
+        line = f"  {marker} {name:<{w_name}}  {acct:<{w_acct}}  {plan:<{w_plan}}{flag}{suffix}"
+        print(line.rstrip())
 
-        # Show auth method indicator
-        auth_indicator = ""
-        if auth_method == "api-key":
-            auth_indicator = " [api-key]"
-        elif auth_method == "oauth" and plan:
-            auth_indicator = ""  # OAuth with plan is normal, no indicator needed
-
-        if plan:
-            print(f"  {marker} {name:<{w_name}}  {acct:<{w_acct}}  {plan}{auth_indicator}{suffix}".rstrip())
-        else:
-            print(f"  {marker} {name:<{w_name}}  {acct}{auth_indicator}{suffix}".rstrip())
+    # A non-Anthropic base URL is legitimate — corporate gateways and proxies
+    # are a normal setup — but it decides who sees your prompts, so say where
+    # they go rather than leaving an unexplained mark in the table.
+    if any(r[3] for r in rows):
+        print("\n  † routed through a third-party endpoint, not Anthropic's API.")
+        print("    Prompts and responses pass through that host.")
 
     # The whole point of profiles is separate accounts; sharing one is almost
     # always an unfinished setup, so say so rather than letting it look correct.

@@ -52,6 +52,7 @@ removed=0
 for SETTINGS in \
     "$HOME/.local/share/code-server/User/settings.json" \
     "$HOME/.vscode-server/data/Machine/settings.json" \
+    "$HOME/.vscode-server/data/User/settings.json" \
     "$HOME/.config/Code/User/settings.json"; do
     [ -f "$SETTINGS" ] || continue
     grep -q 'claudeProcessWrapper' "$SETTINGS" || continue

@@ -1,8 +1,11 @@
 # Never commit profile data. It lives in ~/.claude-profiles by design, but guard
-# against a copy or symlink ever landing in the working tree.
+# against a copy or symlink ever landing in the working tree. .api-key and
+# .api-base-url hold a live API key and the endpoint it bills against.
 .claude-profiles/
 .credentials.json
 .claude.json
+.api-key
+.api-base-url
 *.log
 
 # Editor / OS noise

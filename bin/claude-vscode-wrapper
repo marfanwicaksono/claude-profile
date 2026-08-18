@@ -9,13 +9,28 @@
 # so $1 is the real binary and cwd is the workspace folder.
 #
 # Same resolution rule as the shell wrapper: nearest .claude-profile walking up
-# from cwd names a directory under ~/.claude-profiles/.
+# from cwd names a directory under ~/.claude-profiles/. Same auth rule too — an
+# .api-key in the profile is exported as ANTHROPIC_API_KEY, with .api-base-url
+# as ANTHROPIC_BASE_URL when a gateway or proxy is in use.
 
-CLAUDE_PROFILE_ROOT="$HOME/.claude-profiles"
+CLAUDE_PROFILE_ROOT="${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}"
 LOG="$CLAUDE_PROFILE_ROOT/vscode-wrapper.log"
+mkdir -p "$CLAUDE_PROFILE_ROOT" 2>/dev/null
 
 real="$1"
 [ -n "$real" ] && shift
+
+# First non-empty line, whitespace trimmed. A key with a trailing newline or a
+# stray space authenticates as garbage, and the resulting error says nothing
+# useful, so never pass the raw file through.
+first_line() {
+    local v=""
+    [ -r "$1" ] || return 1
+    IFS= read -r v < "$1" 2>/dev/null
+    v=${v#"${v%%[![:space:]]*}"}
+    v=${v%"${v##*[![:space:]]}"}
+    [ -n "$v" ] && printf '%s\n' "$v"
+}
 
 d="$PWD"
 name=""
@@ -26,19 +41,27 @@ while [ -n "$d" ] && [ "$d" != "/" ]; do
     fi
     d=${d%/*}
 done
+[ -z "$name" ] && [ -r "/.claude-profile" ] && name=$(tr -d '[:space:]' < "/.claude-profile")
 
 if [ -n "$name" ] && [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
     profile_dir="$CLAUDE_PROFILE_ROOT/$name"
-    api_key_file="$profile_dir/.api-key"
+    export CLAUDE_CONFIG_DIR="$profile_dir"
 
-    # Check for API key authentication
-    if [ -f "$api_key_file" ]; then
-        export ANTHROPIC_API_KEY=$(cat "$api_key_file")
-        export CLAUDE_CONFIG_DIR="$profile_dir"
-        printf '%s cwd=%s profile=%s auth=api-key\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+    api_key=$(first_line "$profile_dir/.api-key")
+    if [ -n "$api_key" ]; then
+        export ANTHROPIC_API_KEY="$api_key"
+        base_url=$(first_line "$profile_dir/.api-base-url")
+        if [ -n "$base_url" ]; then
+            export ANTHROPIC_BASE_URL="$base_url"
+            printf '%s cwd=%s profile=%s auth=api-key base-url=%s\n' \
+                   "$(date -Is)" "$PWD" "$name" "$base_url" >> "$LOG" 2>/dev/null
+        else
+            printf '%s cwd=%s profile=%s auth=api-key\n' \
+                   "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+        fi
     else
-        export CLAUDE_CONFIG_DIR="$profile_dir"
-        printf '%s cwd=%s profile=%s auth=oauth\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+        printf '%s cwd=%s profile=%s auth=oauth\n' \
+               "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
     fi
 elif [ -n "$name" ]; then
     # Named a profile that does not exist. Fall through to the default account

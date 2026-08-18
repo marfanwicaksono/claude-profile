@@ -7,12 +7,15 @@ VSCode panel — uses that account automatically.
 ```
 $ cd ~/some-work-project
 $ claude-profile list
-    research  you@university.example    max
-  * work      you@work.example          max
-    default   you@personal.example      max  <- ~/.claude
+    gateway   (API key -> gateway.example.com)  api-key †
+    research  you@university.example            max
+  * work      you@work.example                  max
+    default   you@personal.example              max      <- ~/.claude
 ```
 
-`*` marks the profile active in the current directory.
+`*` marks the profile active in the current directory. Accounts are OAuth logins
+or API keys, including keys for a gateway or proxy — see
+[Two ways to authenticate](#two-ways-to-authenticate).
 
 ---
 
@@ -62,7 +65,7 @@ OAuth tokens, so it is never part of the repo:
 
 ~/.claude-profiles/            <- data, never committed
   work/     .credentials.json  .claude.json  projects -> ~/.claude/projects
-  research/ .credentials.json  .claude.json  projects -> ~/.claude/projects
+  research/ .api-key  .api-base-url  .claude.json  projects -> ...
   vscode-wrapper.log
 
 ~/.claude/                     <- default account + the shared history store
@@ -84,6 +87,25 @@ under one directory. `CLAUDE_CONFIG_DIR` relocates it:
 startup, before project config is read — so a project's `.claude/settings.json`
 `env` block will **not** work. It has to happen at launch, which is what the two
 wrappers below do.
+
+### Two ways to authenticate
+
+A profile is either an OAuth login or an API key. The wrappers read whichever is
+present and set the matching environment before exec:
+
+| Profile holds | Wrapper exports | Billed against |
+| --- | --- | --- |
+| `.credentials.json` (from `claude auth login`) | `CLAUDE_CONFIG_DIR` | your Claude subscription |
+| `.api-key` | `CLAUDE_CONFIG_DIR` + `ANTHROPIC_API_KEY` | API credit |
+| `.api-key` + `.api-base-url` | the above + `ANTHROPIC_BASE_URL` | whatever that endpoint bills |
+
+An `.api-key` **wins over** a `.credentials.json` in the same profile, because
+that is the order Claude Code itself resolves them — an `ANTHROPIC_API_KEY` set
+at launch takes precedence over stored OAuth tokens. `claude-profile list` reports
+the one that will actually be used, not the one that happens to be on disk.
+
+Both files are read at launch and exported into a subshell, so the key never
+enters your interactive environment and never appears in `env` output.
 
 ### Terminal
 
@@ -141,7 +163,8 @@ cwd-resolving wrapper script rather than a per-workspace env var.
 | `claude-profile list` | All profiles, the account each uses, and its plan |
 | `claude-profile new <name>` | Create a profile, wire up shared history, print login command |
 | `claude-profile use <name>` | Bind the current directory to a profile |
-| `claude-profile api-key <name>` | Set API key for a profile (alternative to OAuth) |
+| `claude-profile api-key <name>` | Authenticate a profile with an API key instead of OAuth |
+| `claude-profile base-url <name>` | Show, set, or clear a profile's API endpoint |
 | `claude` | Launch, auto-selecting the profile for this directory |
 
 ### Add an account
@@ -159,18 +182,71 @@ claude-profile use client-x
 > The subcommand is `claude auth login`. There is no bare `claude login` — that
 > parses as a prompt, not a command.
 
-**API Key:**
+**API key:**
 
 ```bash
 claude-profile new client-x
-claude-profile api-key client-x    # prompts for API key
+claude-profile api-key client-x    # prompts, input hidden
 
 cd ~/some-project
 claude-profile use client-x
 ```
 
-Profiles can use either OAuth tokens or API keys. The `claude-profile list` 
-command shows `[api-key]` for API key authenticated profiles.
+The key is written to `~/.claude-profiles/client-x/.api-key` with mode 600 and is
+never echoed back — `claude-profile list` shows only that a key is in use.
+
+Reading from a pipe instead of a prompt provisions a profile from a script or a
+secret store, without the key reaching your shell history:
+
+```bash
+pass show work/anthropic | claude-profile api-key client-x
+```
+
+To take a key back off a profile and return it to OAuth:
+
+```bash
+claude-profile api-key client-x --remove
+CLAUDE_CONFIG_DIR=~/.claude-profiles/client-x claude auth login
+```
+
+### Gateways and third-party proxies
+
+An API key that belongs to a gateway, an LLM proxy, or a resale endpoint also
+needs the request pointed somewhere other than `api.anthropic.com`:
+
+```bash
+claude-profile api-key client-x --base-url https://gateway.example.com
+```
+
+That writes `.api-base-url` alongside the key, and every launch of the profile
+exports it as `ANTHROPIC_BASE_URL`. The endpoint travels with the profile, so a
+gateway key can never be sent to Anthropic's API or the reverse.
+
+Manage it separately with `base-url`:
+
+```bash
+claude-profile base-url client-x                              # show
+claude-profile base-url client-x https://gateway.example.com  # set
+claude-profile base-url client-x --remove                     # back to Anthropic
+```
+
+Profiles on a non-Anthropic endpoint are flagged in `list`:
+
+```
+$ claude-profile list
+    gateway   (API key -> gateway.example.com)  api-key †
+  * default   you@personal.example              max        <- ~/.claude
+
+  † routed through a third-party endpoint, not Anthropic's API.
+    Prompts and responses pass through that host.
+```
+
+That mark is informational, not a warning to dismiss: everything you send through
+such a profile — prompts, file contents, responses — passes through the operator
+of that host, under whatever terms and retention policy they apply. Anthropic's
+own limits and privacy commitments do not extend past their API. Point a profile
+at an endpoint you actually trust, and prefer your OAuth account for work where
+that matters.
 
 ### Bind a project
 
@@ -216,6 +292,7 @@ CLAUDE_CONFIG_DIR=~/.claude-profiles/work command claude
 | | Scope |
 | --- | --- |
 | Credentials / account (OAuth or API key) | **per profile** |
+| API endpoint (`.api-base-url`) | **per profile** |
 | Settings, MCP servers, plugins, agents | **per profile** |
 | Conversation history / session list | **shared** |
 
@@ -263,8 +340,10 @@ Never symlink `.credentials.json` — that re-merges the accounts and defeats th
 ## Other things worth knowing
 
 **You cannot switch mid-session.** Exit and relaunch. `/login` inside a session
-swaps the account *and overwrites that profile's stored credentials*. For API key
-profiles, `/login` will attempt OAuth and may conflict with the API key setup.
+swaps the account *and overwrites that profile's stored credentials*. On an
+API-key profile `/login` writes OAuth tokens that the next launch then ignores,
+since `.api-key` takes precedence — use `claude-profile api-key <name> --remove`
+if you mean to switch that profile back to OAuth.
 
 **The binding is shell-scoped, not filesystem-scoped.** Anything launching `claude`
 without the shell hook or the VSCode wrapper — cron, systemd, a bare `sh -c` — gets
@@ -320,20 +399,39 @@ CLAUDE_CONFIG_DIR=~/.claude-profiles/work claude auth status
 ```
 
 `claude-profile list` reads the same identity straight from `.claude.json` and
-`.credentials.json` (for OAuth) or checks for `.api-key` (for API key auth) 
-instead of spawning Claude — ~27ms for all profiles versus ~518ms per profile.
+`.credentials.json` for OAuth, or from `.api-key` and `.api-base-url` for API-key
+profiles, instead of spawning Claude — ~27ms for all profiles versus ~518ms per
+profile.
 
-**Switch a profile from OAuth to API key (or vice versa)**
+Note that `claude auth status` reports whichever method the *launch* resolved, so
+run it through the profile to see the truth:
 
-To switch from OAuth to API key:
 ```bash
-claude-profile api-key work    # sets API key, profile will use it automatically
+cd ~/my-project && claude auth status   # the shell function applies the profile
 ```
 
-To switch from API key back to OAuth:
+**Switch a profile between OAuth and an API key**
+
 ```bash
-rm ~/.claude-profiles/work/.api-key
+claude-profile api-key work              # OAuth -> API key
+claude-profile api-key work --remove     # API key -> OAuth (then log in again)
 CLAUDE_CONFIG_DIR=~/.claude-profiles/work claude auth login
+```
+
+**Your account shows as "API Key" when you expected your subscription** — a
+`settings.json` `env` block or an `apiKeyHelper` entry overrides OAuth for that
+config dir. Check the one belonging to the account in question:
+
+```bash
+grep -nE 'ANTHROPIC_API_KEY|apiKeyHelper|ANTHROPIC_BASE_URL' ~/.claude/settings.json
+```
+
+Move those into a profile rather than leaving them on the default account, so the
+key applies only where you bind it:
+
+```bash
+claude-profile new gateway
+claude-profile api-key gateway --base-url https://gateway.example.com
 ```
 
 **`Claude Code native binary not found at <path>`** — the extension's
@@ -380,6 +478,19 @@ Point `.envrc` at `~/.claude-profiles/`, **not** inside the project — a config
 in the repo puts `.credentials.json` one `git add -A` away from being committed, and
 fills the working tree with transcript history.
 
+direnv sets `CLAUDE_CONFIG_DIR` only, so an API-key profile needs its key and
+endpoint spelled out too — or, better, leave those to `claude-profile`, which
+reads them from the profile itself:
+
+```bash
+export CLAUDE_CONFIG_DIR="$HOME/.claude-profiles/work"
+export ANTHROPIC_API_KEY="$(cat "$HOME/.claude-profiles/work/.api-key")"
+export ANTHROPIC_BASE_URL="$(cat "$HOME/.claude-profiles/work/.api-base-url")"
+```
+
+Unlike the shell function, `.envrc` puts the key in every process started from
+that directory, not just `claude`.
+
 ### On macOS
 
 macOS builds can read credentials from the system Keychain rather than a file in the
@@ -390,7 +501,8 @@ CLAUDE_CONFIG_DIR=~/.claude-profiles/work claude auth status
 ```
 
 On Linux, credentials are a plain file inside the config directory, which is why the
-isolation is clean.
+isolation is clean. API-key profiles are unaffected either way — the key comes from
+`.api-key` in the profile, never from the Keychain.
 
 ---
 
