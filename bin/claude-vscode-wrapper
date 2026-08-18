@@ -28,8 +28,18 @@ while [ -n "$d" ] && [ "$d" != "/" ]; do
 done
 
 if [ -n "$name" ] && [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
-    export CLAUDE_CONFIG_DIR="$CLAUDE_PROFILE_ROOT/$name"
-    printf '%s cwd=%s profile=%s\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+    profile_dir="$CLAUDE_PROFILE_ROOT/$name"
+    api_key_file="$profile_dir/.api-key"
+
+    # Check for API key authentication
+    if [ -f "$api_key_file" ]; then
+        export ANTHROPIC_API_KEY=$(cat "$api_key_file")
+        export CLAUDE_CONFIG_DIR="$profile_dir"
+        printf '%s cwd=%s profile=%s auth=api-key\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+    else
+        export CLAUDE_CONFIG_DIR="$profile_dir"
+        printf '%s cwd=%s profile=%s auth=oauth\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
+    fi
 elif [ -n "$name" ]; then
     # Named a profile that does not exist. Fall through to the default account
     # rather than launching an unauthenticated blank config.

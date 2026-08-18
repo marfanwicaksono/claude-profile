@@ -54,16 +54,29 @@ def paths_for(name):
 
 
 def describe(name):
-    """-> (account, plan) as display strings."""
+    """-> (account, plan, auth_method) as display strings."""
     config_json, credentials_json = paths_for(name)
+
+    # Check for API key authentication
+    if name == "default":
+        api_key_file = os.path.join(HOME, ".claude", ".api-key")
+    else:
+        api_key_file = os.path.join(ROOT, name, ".api-key")
+
+    if os.path.isfile(api_key_file):
+        config = read_json(config_json)
+        auth_method_marker = config.get("authMethod")
+        return "(API key)", "", "api-key"
+
+    # OAuth authentication
     account = read_json(config_json).get("oauthAccount", {}).get("emailAddress")
     creds = read_json(credentials_json).get("claudeAiOauth", {})
     plan = creds.get("subscriptionType")
     if account:
-        return account, (plan or "")
+        return account, (plan or ""), "oauth"
     if creds:
-        return "(logged in, account unknown)", (plan or "")
-    return "(not logged in)", ""
+        return "(logged in, account unknown)", (plan or ""), "oauth"
+    return "(not logged in)", "", "none"
 
 
 def profile_names():
@@ -77,8 +90,11 @@ def profile_names():
 
 
 def show_account(name):
-    account, plan = describe(name)
-    print(f"{account} ({plan})" if plan else account)
+    account, plan, auth_method = describe(name)
+    if plan:
+        print(f"{account} ({plan})")
+    else:
+        print(account)
 
 
 def show_table():
@@ -87,17 +103,30 @@ def show_table():
 
     w_name = max(len(r[0]) for r in rows)
     w_acct = max(len(r[1]) for r in rows)
-    for name, acct, plan in rows:
+    w_plan = max(len(r[2]) for r in rows) if any(r[2] for r in rows) else 0
+
+    for name, acct, plan, auth_method in rows:
         # '*' marks the profile active in the current directory, not the
         # default account — the default is already labelled by name.
         marker = "*" if name == ACTIVE else " "
         suffix = "  <- ~/.claude" if name == "default" else ""
-        print(f"  {marker} {name:<{w_name}}  {acct:<{w_acct}}  {plan}{suffix}".rstrip())
+
+        # Show auth method indicator
+        auth_indicator = ""
+        if auth_method == "api-key":
+            auth_indicator = " [api-key]"
+        elif auth_method == "oauth" and plan:
+            auth_indicator = ""  # OAuth with plan is normal, no indicator needed
+
+        if plan:
+            print(f"  {marker} {name:<{w_name}}  {acct:<{w_acct}}  {plan}{auth_indicator}{suffix}".rstrip())
+        else:
+            print(f"  {marker} {name:<{w_name}}  {acct}{auth_indicator}{suffix}".rstrip())
 
     # The whole point of profiles is separate accounts; sharing one is almost
     # always an unfinished setup, so say so rather than letting it look correct.
     seen = {}
-    for name, acct, _ in rows:
+    for name, acct, _, _ in rows:
         if "@" in acct:
             seen.setdefault(acct, []).append(name)
     for acct, names in seen.items():

@@ -60,13 +60,23 @@ _claude_resolve_profile() {
 }
 
 claude() {
-    local found name
+    local found name profile_dir api_key_file
     found=$(_claude_resolve_profile)
     name=${found%%$'\t'*}
     if [ -z "$found" ]; then
         command claude "$@"
     elif [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
-        CLAUDE_CONFIG_DIR="$CLAUDE_PROFILE_ROOT/$name" command claude "$@"
+        profile_dir="$CLAUDE_PROFILE_ROOT/$name"
+        api_key_file="$profile_dir/.api-key"
+
+        # Check if this profile uses API key authentication
+        if [ -f "$api_key_file" ]; then
+            ANTHROPIC_API_KEY=$(cat "$api_key_file") \
+            CLAUDE_CONFIG_DIR="$profile_dir" command claude "$@"
+        else
+            # OAuth authentication
+            CLAUDE_CONFIG_DIR="$profile_dir" command claude "$@"
+        fi
     else
         printf 'claude: profile %s not found in %s\n' "$name" "$CLAUDE_PROFILE_ROOT" >&2
         printf "claude: run 'claude-profile new %s' first, or fix %s\n" \
@@ -86,7 +96,33 @@ claude-profile() {
         mkdir -p "$CLAUDE_PROFILE_ROOT/$2" || return 1
         _claude_link_shared "$CLAUDE_PROFILE_ROOT/$2"
         echo "created $CLAUDE_PROFILE_ROOT/$2 (history shared with default account)"
-        echo "log in with:  CLAUDE_CONFIG_DIR=$CLAUDE_PROFILE_ROOT/$2 claude auth login"
+        echo ""
+        echo "authenticate with OAuth:  CLAUDE_CONFIG_DIR=$CLAUDE_PROFILE_ROOT/$2 claude auth login"
+        echo "      or with API key:  claude-profile api-key $2"
+        ;;
+      api-key)
+        [ -z "$2" ] && { echo "usage: claude-profile api-key <name>" >&2; return 1; }
+        if [ ! -d "$CLAUDE_PROFILE_ROOT/$2" ]; then
+            echo "claude-profile: profile '$2' does not exist" >&2
+            echo "claude-profile: run 'claude-profile new $2' first" >&2
+            return 1
+        fi
+        local profile_dir="$CLAUDE_PROFILE_ROOT/$2"
+        echo "Enter API key for profile '$2':"
+        read -rs api_key
+        if [ -z "$api_key" ]; then
+            echo "claude-profile: no API key provided" >&2
+            return 1
+        fi
+        # Create .api-key file to mark this as API key auth
+        echo "$api_key" > "$profile_dir/.api-key"
+        chmod 600 "$profile_dir/.api-key"
+        # Create a minimal .claude.json to mark it as configured
+        if [ ! -f "$profile_dir/.claude.json" ]; then
+            echo '{"authMethod":"apiKey"}' > "$profile_dir/.claude.json"
+        fi
+        echo "API key set for profile '$2'"
+        echo "Launch with: ANTHROPIC_API_KEY=\$(cat $profile_dir/.api-key) claude"
         ;;
       use)
         [ -z "$2" ] && { echo "usage: claude-profile use <name>" >&2; return 1; }
@@ -135,7 +171,7 @@ claude-profile() {
         fi
         ;;
       *)
-        echo "usage: claude-profile [status|list|new <name>|use <name>]" >&2
+        echo "usage: claude-profile [status|list|new <name>|use <name>|api-key <name>]" >&2
         return 1
         ;;
     esac

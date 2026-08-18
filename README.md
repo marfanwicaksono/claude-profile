@@ -141,9 +141,12 @@ cwd-resolving wrapper script rather than a per-workspace env var.
 | `claude-profile list` | All profiles, the account each uses, and its plan |
 | `claude-profile new <name>` | Create a profile, wire up shared history, print login command |
 | `claude-profile use <name>` | Bind the current directory to a profile |
+| `claude-profile api-key <name>` | Set API key for a profile (alternative to OAuth) |
 | `claude` | Launch, auto-selecting the profile for this directory |
 
 ### Add an account
+
+**OAuth (browser login):**
 
 ```bash
 claude-profile new client-x
@@ -155,6 +158,19 @@ claude-profile use client-x
 
 > The subcommand is `claude auth login`. There is no bare `claude login` — that
 > parses as a prompt, not a command.
+
+**API Key:**
+
+```bash
+claude-profile new client-x
+claude-profile api-key client-x    # prompts for API key
+
+cd ~/some-project
+claude-profile use client-x
+```
+
+Profiles can use either OAuth tokens or API keys. The `claude-profile list` 
+command shows `[api-key]` for API key authenticated profiles.
 
 ### Bind a project
 
@@ -199,7 +215,7 @@ CLAUDE_CONFIG_DIR=~/.claude-profiles/work command claude
 
 | | Scope |
 | --- | --- |
-| Credentials / account | **per profile** |
+| Credentials / account (OAuth or API key) | **per profile** |
 | Settings, MCP servers, plugins, agents | **per profile** |
 | Conversation history / session list | **shared** |
 
@@ -247,7 +263,8 @@ Never symlink `.credentials.json` — that re-merges the accounts and defeats th
 ## Other things worth knowing
 
 **You cannot switch mid-session.** Exit and relaunch. `/login` inside a session
-swaps the account *and overwrites that profile's stored credentials*.
+swaps the account *and overwrites that profile's stored credentials*. For API key
+profiles, `/login` will attempt OAuth and may conflict with the API key setup.
 
 **The binding is shell-scoped, not filesystem-scoped.** Anything launching `claude`
 without the shell hook or the VSCode wrapper — cron, systemd, a bare `sh -c` — gets
@@ -303,8 +320,21 @@ CLAUDE_CONFIG_DIR=~/.claude-profiles/work claude auth status
 ```
 
 `claude-profile list` reads the same identity straight from `.claude.json` and
-`.credentials.json` instead of spawning Claude — ~27ms for all profiles versus
-~518ms per profile.
+`.credentials.json` (for OAuth) or checks for `.api-key` (for API key auth) 
+instead of spawning Claude — ~27ms for all profiles versus ~518ms per profile.
+
+**Switch a profile from OAuth to API key (or vice versa)**
+
+To switch from OAuth to API key:
+```bash
+claude-profile api-key work    # sets API key, profile will use it automatically
+```
+
+To switch from API key back to OAuth:
+```bash
+rm ~/.claude-profiles/work/.api-key
+CLAUDE_CONFIG_DIR=~/.claude-profiles/work claude auth login
+```
 
 **`Claude Code native binary not found at <path>`** — the extension's
 `claudeProcessWrapper` points somewhere that no longer exists. Usually this means a
