@@ -23,7 +23,7 @@ _CLAUDE_PROFILE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pw
 # `bin` is legacy (helpers used to live there before the repo split).
 _claude_reserved_name() {
     case "$1" in
-      bin) return 0 ;;
+      bin|default) return 0 ;;
       *)   return 1 ;;
     esac
 }
@@ -84,7 +84,8 @@ claude() {
     found=$(_claude_resolve_profile)
     name=${found%%$'\t'*}
 
-    if [ -z "$found" ]; then
+    # `default` names the normal account (~/.claude), same as no .claude-profile.
+    if [ -z "$found" ] || [ "$name" = default ]; then
         command claude "$@"
         return
     fi
@@ -219,6 +220,11 @@ claude-profile() {
         ;;
       use)
         [ -z "$2" ] && { echo "usage: claude-profile use <name>" >&2; return 1; }
+        if [ "$2" != default ] && [ ! -d "$CLAUDE_PROFILE_ROOT/$2" ]; then
+            echo "claude-profile: profile '$2' does not exist" >&2
+            echo "claude-profile: run 'claude-profile new $2' first" >&2
+            return 1
+        fi
         echo "$2" > .claude-profile && echo "$PWD -> profile '$2'"
         ;;
       list|ls)
@@ -250,12 +256,16 @@ claude-profile() {
         ;;
       ""|status)
         found=$(_claude_resolve_profile)
-        if [ -z "$found" ]; then
-            echo "profile: default (no .claude-profile here or above)"
+        name=${found%%$'\t'*}
+        if [ -z "$found" ] || [ "$name" = default ]; then
+            if [ -z "$found" ]; then
+                echo "profile: default (no .claude-profile here or above)"
+            else
+                echo "profile: default (from ${found#*$'\t'}/.claude-profile)"
+            fi
             echo "config:  $HOME/.claude"
             [ -x "$lister" ] && echo "account: $(CLAUDE_PROFILE_ROOT="$CLAUDE_PROFILE_ROOT" "$lister" --account default)"
         else
-            name=${found%%$'\t'*}
             echo "profile: $name (from ${found#*$'\t'}/.claude-profile)"
             echo "config:  $CLAUDE_PROFILE_ROOT/$name"
             if [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
