@@ -85,8 +85,10 @@ claude() {
     name=${found%%$'\t'*}
 
     # `default` names the normal account (~/.claude), same as no .claude-profile.
+    # Drop any inherited CLAUDE_CONFIG_DIR — a shell started from inside a
+    # profiled session carries that profile's dir, which would silently win.
     if [ -z "$found" ] || [ "$name" = default ]; then
-        command claude "$@"
+        ( unset CLAUDE_CONFIG_DIR; command claude "$@" )
         return
     fi
 

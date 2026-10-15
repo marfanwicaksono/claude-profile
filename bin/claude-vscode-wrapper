@@ -43,7 +43,12 @@ while [ -n "$d" ] && [ "$d" != "/" ]; do
 done
 [ -z "$name" ] && [ -r "/.claude-profile" ] && name=$(tr -d '[:space:]' < "/.claude-profile")
 
-if [ -n "$name" ] && [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
+if [ "$name" = default ]; then
+    # `default` is the normal account (~/.claude), never a directory under
+    # $CLAUDE_PROFILE_ROOT — same rule as the shell wrapper.
+    unset CLAUDE_CONFIG_DIR
+    printf '%s cwd=%s profile=default -> ~/.claude\n' "$(date -Is)" "$PWD" >> "$LOG" 2>/dev/null
+elif [ -n "$name" ] && [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
     profile_dir="$CLAUDE_PROFILE_ROOT/$name"
     export CLAUDE_CONFIG_DIR="$profile_dir"
 
@@ -66,8 +71,10 @@ if [ -n "$name" ] && [ -d "$CLAUDE_PROFILE_ROOT/$name" ]; then
 elif [ -n "$name" ]; then
     # Named a profile that does not exist. Fall through to the default account
     # rather than launching an unauthenticated blank config.
+    unset CLAUDE_CONFIG_DIR
     printf '%s cwd=%s profile=%s MISSING -> default\n' "$(date -Is)" "$PWD" "$name" >> "$LOG" 2>/dev/null
 else
+    unset CLAUDE_CONFIG_DIR
     printf '%s cwd=%s no-profile -> default\n' "$(date -Is)" "$PWD" >> "$LOG" 2>/dev/null
 fi
 
