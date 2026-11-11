@@ -13,3 +13,6 @@
 *.swp
 __pycache__/
 *.pyc
+
+# Profile files
+.claude-profile
